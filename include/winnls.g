@@ -1,4 +1,17 @@
 
+MAX_DEFAULTCHAR	:=2
+MAX_LEADBYTES	:=12
+
+struct CPINFOEXW
+	MaxCharSize		dd ?			; UINT
+	DefaultChar		rb MAX_DEFAULTCHAR	; WCHAR[]
+	LeadByte		rb MAX_LEADBYTES	; WCHAR[]
+	UnicodeDefaultChar	dw ?			; WCHAR
+	CodePage		dd ?			; UINT
+	CodePageName		rw MAX_PATH		; WCHAR[]
+ends
+
+
 
 
 ; Flags for MultiByteToWideChar/WideCharToMultiByte

@@ -60,6 +60,7 @@ clr:	take ,C
 	jyes clr
 end calminstruction
 
+{const:16} hextab db '0123456789ABCDEF'
 
 :Main.error:
 
@@ -71,6 +72,7 @@ $ $	10,27,'[97m'
 $ $	'Byte Character Table Utility version 0.1',10,10,27,'[32m'
 $ $	'  Usage:',27,'[m',' charbyte [locale|codepage] <value>',10
 $ $	'	the default mode is [codepage] (i.e. optional)',10
+$ $	'	the default codepage is IBM437 OEM United States',10
 $ $	'	LOCALE_USER_DEFAULT is the default locale',10
 $	'	<value> can be a number, name or string',10
 
@@ -122,17 +124,21 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	cmp qword [rsi], 0
 	jz .args_processed
 
+	lstrcmpiW [rsi], W "help"
+	test eax, eax
+	jz .display_usage
 	lstrcmpiW [rsi], W "codepage"
-	xchg ecx, eax
-	jrcxz .mode_codepage
+	test eax, eax
+	jz .mode_codepage
 	lstrcmpiW [rsi], W "locale"
-	xchg ecx, eax
-	jrcxz .mode_locale
+	test eax, eax
+	jz .mode_locale
 
 	mov rdi, [rsi]
 	call wtoi64_RDI
 	jnz .arg_number
-
+	test rax, rax
+	jnz .display_usage ; too many digits
 	lodsq
 	jmp .arg_string ; assume value is a string
 
@@ -152,6 +158,8 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jmp .skip_arg
 
 .arg_number: ; support 32-bit [un]signed range
+	cmp word [rdi], 0
+	jnz .display_usage ; invalid form, numbers need to be complete arg
 	mov ecx, eax
 	movsxd rdx, eax
 	sub rcx, rax
@@ -159,7 +167,6 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	sub rdx, rax
 	jnz .bad_arg
 @@:
-	lodsq
 	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
 	mov ecx, [.flags]
 	and ecx, 11b
@@ -168,9 +175,11 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jnz .display_usage ; ambiguous mode
 .store_locale:
 	mov [.locale], eax
+	lodsq
 	jmp .process_args
 .store_codepage:
 	mov [.codepage], eax
+	lodsq
 	jmp .process_args
 
 .arg_string:
@@ -183,7 +192,12 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 .string_locale:
 	mov [.lpNameToResolve], rax
 	jmp .process_args
+
 .string_codepage:
+;	CP_ACP		system default Windows ANSI code page
+;	CP_MACCP	system default Macintosh code page
+;	CP_OEMCP	system default OEM code page
+;	CP_THREAD_ACP	current thread's ANSI code page
 	mov [.lpCodePage], rax
 	jmp .process_args
 
@@ -217,9 +231,6 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	; TODO: find suitable locale for codepage selection:
 
 .basis_locale:
-
-	; TODO: warn if the code page is not a single byte code page
-
 	{const:64} .lpSrcStr:
 	repeat 256
 		{const:64} db %-1
@@ -239,41 +250,20 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 ;	ccBuf += GetLocaleInfo(LOCALE_SYSTEM_DEFAULT, LOCALE_SISO3166CTRYNAME, buf+ccBuf, 9);
 
 .have_codepage:
+	{bss:4} .cpiw CPINFOEXW
+	GetCPInfoExW [.codepage], 0, & .cpiw ; translate identifiers to code page number
+	test eax, eax ; BOOL
+	jz .invalid_code_page
+	cmp [.cpiw.MaxCharSize], 1
+	jz .SBCS ; single-byte character set
 
-$	10,KHEX,\
-	"     0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F     ",10,BRDR,\
-	"   ╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗   ",10
+$	10,27,'[93m',\
+	'Warning: this tool is designed for use with single-byte character sets.',10
 
-	xor ebx, ebx
-.table_outer:
-	{const:16} hextab db '0123456789ABCDEF'
-	mov eax, ebx
-	shr eax, 4
-	mov al, [hextab + rax]
-	mov [.lead_in.index], ax
-	mov [.lead_out.index], ax
-	{data:2} .lead_in du ' ',KHEX
-	{data:2} .lead_in.index du 'X',BRDR,' ║ ',KHAR
-	{data:2} .lead_in.end:
-	.lead_in.chars := (.lead_in.end - .lead_in) shr 1
-	WriteConsoleW [.hOutput], & .lead_in, .lead_in.chars, 0, 0
-
-.table_inner:
-;	test [.lpCharType + rbx*2], C1_CNTRL
-;	jnz .char_control
-
-.char_output:
-	mov [.char], bl
-
-; codepage	ranges, FIXME: don't care if encoding not single byte
-; 37		04 06 ?+ -3F FF
-; 437		FF
-; 1250		83 ?+ 98
-; 1361		80-8F
-; 20424		20-3F FF
-; 28591		80-9F
-
+.SBCS:
 ; partial support for multibyte code pages?
+	mov ecx, [.cpiw.CodePage]
+	mov edx, MB_ERR_INVALID_CHARS or MB_USEGLYPHCHARS ; desired flags
 
 	xor eax, eax ; the following code pages only support dwFlags of zero:
 	iterate cp, 42,<50220,50222>,50225,50227,50229,<57002,57011>,65000
@@ -294,18 +284,48 @@ $	10,KHEX,\
 		cmp ecx, cp
 		cmovz edx, eax
 	end iterate
+	{bss:4} .dwFlags dd ?
+	mov [.dwFlags], edx
 
-	MultiByteToWideChar [.codepage], MB_ERR_INVALID_CHARS or MB_USEGLYPHCHARS,\
-		& .char, 1, & .wide, 4
+; TODO: codepage/locale info header
+; & .cpiw.CodePageName
+
+$	10,KHEX,\
+	"     0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F     ",10,BRDR,\
+	"   ╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗   ",10
+
+	xor ebx, ebx
+.table_outer:
+	mov eax, ebx
+	shr eax, 4
+	mov al, [hextab + rax]
+	mov [.lead_in.index], ax
+	mov [.lead_out.index], ax
+	{data:2} .lead_in du ' ',KHEX
+	{data:2} .lead_in.index du 'X',BRDR,' ║ ',KHAR
+	{data:2} .lead_in.end:
+	.lead_in.chars := (.lead_in.end - .lead_in) shr 1
+	WriteConsoleW [.hOutput], & .lead_in, .lead_in.chars, 0, 0
+
+.table_inner:
+;	test [.lpCharType + rbx*2], C1_CNTRL
+;	jnz .char_control
+
+.char_output:
+	mov [.char], bl
+	MultiByteToWideChar [.cpiw.CodePage], [.dwFlags], & .char, 1, & .wide, 4
 	cmp eax, 1
 	jnz .char_unknown
 
 ; still need to filter out control:
 	cmp word [.wide], ' '
 	jc .char_control
-;	cmp word [.wide], ?
-;	jz .char_control
-
+; skip 0x007F-0x009F, C1 control block, ISO/IEC 8859, private use controls
+	cmp word [.wide], 0x007F
+	jc @F
+	cmp word [.wide], 0x009F+1
+	jc .char_control
+@@:
 	WriteConsoleW [.hOutput], & .wide, 1, 0, 0
 	jmp .tween
 
@@ -348,12 +368,52 @@ $	BRDR,\
 	"     0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F     ",10,27,'[m'
 
 	mov [.result], 0
+	if 0 ; debugging
+		{data:2} .debug5 du ' ????',10
+		xor ebx, ebx
+		mov rsi, qword [.debug5 + 2]
+	@5:	mov [.char], bl
+		MultiByteToWideChar [.cpiw.CodePage], [.dwFlags], & .char, 1, & .wide, 4
+		mov qword [.debug5 + 2], rsi ; unknown
+		cmp eax, 1
+		jnz @F
+
+		movzx eax, byte [.wide+1]
+		mov ecx, eax
+		shr eax, 4
+		and ecx, 0xF
+		movzx eax, byte [hextab + rax]
+		movzx ecx, byte [hextab + rcx]
+		mov [.debug5 + 2], ax
+		mov [.debug5 + 4], cx
+
+		movzx eax, byte [.wide]
+		mov ecx, eax
+		shr eax, 4
+		and ecx, 0xF
+		movzx eax, byte [hextab + rax]
+		movzx ecx, byte [hextab + rcx]
+		mov [.debug5 + 6], ax
+		mov [.debug5 + 8], cx
+	@@:
+		add bl, 1
+		xor r8, r8
+		test bl, 0xF
+		setz r8b
+		add r8b, 5
+		WriteConsoleW [.hOutput], & .debug5, r8, 0, 0
+		test ebx, ebx
+		jnz @5B
+	end if
 	jmp .done
 
 .unable_to_resolve_locale:
 	jmp .error
 
 .locale_not_LCID: ; is this possible?
+	jmp .error
+
+.invalid_code_page:
 	jmp .error
 
 
