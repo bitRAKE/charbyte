@@ -13,6 +13,9 @@ KHAR	equ 27,'[m'	; character
 KONT	equ 27,'[35m'	;	" control
 KERR	equ 27,'[91m'	;	" invalid
 
+FLAG_CODEPAGE	:= 0
+FLAG_LOCALE	:= 1
+
 
 include 'console.g'
 include 'winnls.g'
@@ -66,7 +69,7 @@ end calminstruction
 $ $	10,27,'[97m'
 $ $	'Byte Character Table Utility version 0.1',10,10,27,'[32m'
 $ $	'  Usage:',27,'[m',' charbyte [locale|codepage] <value>',10
-$ $	'	the default mode is [locale] (i.e. optional)',10
+$ $	'	the default mode is [codepage] (i.e. optional)',10
 $ $	'	LOCALE_USER_DEFAULT is the default locale',10
 $	'	<value> can be a number, name or string',10
 
@@ -80,11 +83,12 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 		.lpCmdLine	dq ?
 		.argv		dq ?
 		.argn		dd ?
-		align.assume rbp,16
-		align 16
+			align.assume rbp,16
+			align 16
 		.local := $-$$
 				rq 2
 		.hOutput	dq ?
+		.Value64	dq ?
 		.result		dd ?
 		.wide		rw 4
 		.char		db ?
@@ -96,20 +100,10 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 ; default settings:
 	{data:4} .locale	dd LOCALE_USER_DEFAULT ; LCID
 	{data:4} .codepage	dd 437
+	{data:4} .flags		dd 0
 
 	GetStdHandle STD_OUTPUT_HANDLE
 	mov [.hOutput], rax
-
-; get and parse commandline (wip)
-;	#
-;	LOCALE_NAME_*
-;	"codepage"
-;		CP_*
-;		#
-
-;	LOCALE_NAME_INVARIANT
-;	LOCALE_NAME_SYSTEM_DEFAULT
-;	LOCALE_NAME_USER_DEFAULT
 
 	GetCommandLineW
 	mov [.lpCmdLine], rax
@@ -128,20 +122,56 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	cmp qword [rsi], 0
 	jz .args_processed
 
-	lodsq
-	push rsi
-	xchg rsi, rax
+	lstrcmpiW [rsi], W "codepage"
+	xchg ecx, eax
+	jrcxz .mode_codepage
+	lstrcmpiW [rsi], W "locale"
+	xchg ecx, eax
+	jrcxz .mode_locale
 
-; process string
+	or [.Value64], -1
+	StrToInt64ExW [rsi], 1, & .Value64 ; STIF_SUPPORT_HEX
+	test eax, eax
+	jnz .arg_number
+
+.bad_arg:
 	stc
-
-	pop rsi
+.skip_arg:
+	lodsq
 	jc .display_usage ; argument unknown or possible error condition
 	jmp .process_args
+
+.mode_codepage:
+	bts [.flags], FLAG_CODEPAGE
+	jmp .skip_arg
+
+.mode_locale:
+	bts [.flags], FLAG_LOCALE
+	jmp .skip_arg
+
+.arg_number:
+	mov eax, dword [.Value64]
+	cmp [.Value64], rax
+	jnz .bad_arg
+	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
+	mov ecx, [.flags]
+	and ecx, 11b
+	cmp ecx, 10b
+	jc .store_codepage
+	jnz .display_usage ; ambiguous mode
+.store_locale:
+	mov [.locale], eax
+	clc
+	jmp .skip_arg
+.store_codepage:
+	mov [.codepage], eax
+	clc
+	jmp .skip_arg
 
 .args_processed:
 	cmp [.lpNameToResolve], 0
 	jz .basis_codepage
+
 
 {bss:8} .lpNameToResolve	dq ?
 {bss:2} .LocaleName		rw LOCALE_NAME_MAX_LENGTH
@@ -318,4 +348,5 @@ virtual as "response" ; configure linker from here:
 	db '/SUBSYSTEM:CONSOLE,6.02',10
 	db 'kernel32.lib',10
 	db 'shell32.lib',10
+	db 'shlwapi.lib',10
 end virtual
