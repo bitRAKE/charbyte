@@ -19,6 +19,7 @@ FLAG_LOCALE	:= 1
 
 include 'console.g'
 include 'winnls.g'
+extrn wtoi64_RDI
 
 ; just a console output helper (w/ caching)
 calminstruction ?? line&
@@ -88,7 +89,6 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 		.local := $-$$
 				rq 2
 		.hOutput	dq ?
-		.Value64	dq ?
 		.result		dd ?
 		.wide		rw 4
 		.char		db ?
@@ -129,10 +129,12 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	xchg ecx, eax
 	jrcxz .mode_locale
 
-	or [.Value64], -1
-	StrToInt64ExW [rsi], 1, & .Value64 ; STIF_SUPPORT_HEX
-	test eax, eax
+	mov rdi, [rsi]
+	call wtoi64_RDI
 	jnz .arg_number
+
+	lodsq
+	jmp .arg_string ; assume value is a string
 
 .bad_arg:
 	stc
@@ -149,10 +151,15 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	bts [.flags], FLAG_LOCALE
 	jmp .skip_arg
 
-.arg_number:
-	mov eax, dword [.Value64]
-	cmp [.Value64], rax
+.arg_number: ; support 32-bit [un]signed range
+	mov ecx, eax
+	movsxd rdx, eax
+	sub rcx, rax
+	jz @F
+	sub rdx, rax
 	jnz .bad_arg
+@@:
+	lodsq
 	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
 	mov ecx, [.flags]
 	and ecx, 11b
@@ -161,18 +168,34 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jnz .display_usage ; ambiguous mode
 .store_locale:
 	mov [.locale], eax
-	clc
-	jmp .skip_arg
+	jmp .process_args
 .store_codepage:
 	mov [.codepage], eax
-	clc
-	jmp .skip_arg
+	jmp .process_args
+
+.arg_string:
+	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
+	mov ecx, [.flags]
+	and ecx, 11b
+	cmp ecx, 10b
+	jc .string_codepage
+	jnz .display_usage ; ambiguous mode
+.string_locale:
+	mov [.lpNameToResolve], rax
+	jmp .process_args
+.string_codepage:
+	mov [.lpCodePage], rax
+	jmp .process_args
+
+
 
 .args_processed:
-	cmp [.lpNameToResolve], 0
+	test [.flags], 1 shl FLAG_LOCALE
 	jz .basis_codepage
+	cmp [.lpNameToResolve], 0
+	jz .basis_locale ; use numeric locale
 
-
+{bss:8} .lpCodePage		dq ?
 {bss:8} .lpNameToResolve	dq ?
 {bss:2} .LocaleName		rw LOCALE_NAME_MAX_LENGTH
 
@@ -186,11 +209,12 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jmp .basis_locale
 
 .basis_codepage:
-	cmp [.codepage], 0
-	jz .basis_locale
+	cmp [.lpCodePage], 0
+	jz .have_codepage ; use numeric codepage
 
-; TODO: find suitable locale for codepage selection:
+	; TODO: resolve code page string
 
+	; TODO: find suitable locale for codepage selection:
 
 .basis_locale:
 
@@ -206,6 +230,7 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	test eax, eax ; BOOL
 	jz .error
 
+	; TODO: find suitable codepage for locale:
 
 ; LCIDToLocaleName
 ;	char buf[19];
@@ -213,7 +238,7 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 ;	buf[ccBuf++] = '-';
 ;	ccBuf += GetLocaleInfo(LOCALE_SYSTEM_DEFAULT, LOCALE_SISO3166CTRYNAME, buf+ccBuf, 9);
 
-
+.have_codepage:
 
 $	10,KHEX,\
 	"     0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F     ",10,BRDR,\
