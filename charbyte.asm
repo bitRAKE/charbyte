@@ -62,17 +62,30 @@ end calminstruction
 
 {const:16} hextab db '0123456789ABCDEF'
 
-:Main.error:
 
-; TODO: show an error string ... fall into usage.
+
+; invalid codepage: 1200, 1259, ...
+
+macro jcc_error JCC*,text* ; reduce interference from error checking
+	local message,characters
+	COFF.2.CONST message du characters,27,'[91m',text
+	COFF.2.CONST characters := ($ - message - 2) shr 1
+	lea rdx, [message+2]
+	JCC .error
+end macro
+
+:Main.error: ; TODO: show an error string ... fall into usage.
+	.hOutput equ Main.hOutput
+	movzx r8d, word [rdx-2] ; characters
+	WriteConsoleW [.hOutput], rdx, r8d, 0, 0
 
 :Main.display_usage:
 	.hOutput equ Main.hOutput
 $ $	10,27,'[97m'
 $ $	'Byte Character Table Utility version 0.1',10,10,27,'[32m'
-$ $	'  Usage:',27,'[m',' charbyte [locale|codepage] <value>',10
+$ $	'  Usage:',27,'[m',' charbyte [help|locale|codepage] <value>',10
 $ $	'	the default mode is [codepage] (i.e. optional)',10
-$ $	'	the default codepage is IBM437 OEM United States',10
+$ $	'	the default codepage is ??',10
 $ $	'	LOCALE_USER_DEFAULT is the default locale',10
 $	'	<value> can be a number, name or string',10
 
@@ -139,7 +152,6 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jnz .arg_number
 	test rax, rax
 	jnz .display_usage ; too many digits
-	lodsq
 	jmp .arg_string ; assume value is a string
 
 .bad_arg:
@@ -160,17 +172,17 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 .arg_number: ; support 32-bit [un]signed range
 	cmp word [rdi], 0
 	jnz .display_usage ; invalid form, numbers need to be complete arg
-	mov ecx, eax
 	movsxd rdx, eax
-	sub rcx, rax
+	mov ecx, eax
+	cmp rdx, rax
 	jz @F
-	sub rdx, rax
+	cmp rcx, rax
 	jnz .bad_arg
 @@:
-	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
+	assert FLAG_CODEPAGE=0 ; needed for default routing
 	mov ecx, [.flags]
-	and ecx, 11b
-	cmp ecx, 10b
+	and ecx, FLAG_CODEPAGE or FLAG_LOCALE
+	cmp ecx, FLAG_LOCALE
 	jc .store_codepage
 	jnz .display_usage ; ambiguous mode
 .store_locale:
@@ -183,23 +195,33 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	jmp .process_args
 
 .arg_string:
-	assert FLAG_CODEPAGE=0 & FLAG_LOCALE=1
+	assert FLAG_CODEPAGE=0 ; needed for default routing
 	mov ecx, [.flags]
-	and ecx, 11b
-	cmp ecx, 10b
-	jc .string_codepage
+	and ecx, FLAG_CODEPAGE or FLAG_LOCALE
+	cmp ecx, FLAG_LOCALE
+	jc .store_codepage
 	jnz .display_usage ; ambiguous mode
 .string_locale:
-	mov [.lpNameToResolve], rax
-	jmp .process_args
+	push [rsi]
+	pop [.lpNameToResolve]
+	jmp .skip_arg
 
 .string_codepage:
-;	CP_ACP		system default Windows ANSI code page
-;	CP_MACCP	system default Macintosh code page
-;	CP_OEMCP	system default OEM code page
-;	CP_THREAD_ACP	current thread's ANSI code page
-	mov [.lpCodePage], rax
-	jmp .process_args
+	iterate abstract, CP_ACP,CP_OEMCP,CP_MACCP,CP_THREAD_ACP,\
+	\; these don't really make sense (as they aren't byte encodings):
+		CP_UTF7,CP_UTF8
+
+		lstrcmpiW [rsi], W `abstract
+		test eax, eax
+		jnz .CP_.%
+		mov [.codepage], abstract
+		jmp .skip_arg
+	.CP_.%:
+	end iterate
+	; probably just an error
+	push [rsi]
+	pop [.lpCodePage]
+	jmp .skip_arg
 
 
 
@@ -215,10 +237,10 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 
 	ResolveLocaleName [.lpNameToResolve], & .LocaleName, LOCALE_NAME_MAX_LENGTH
 	test eax, eax
-	jz .unable_to_resolve_locale
+	jcc_error jz, "Unable to resolve locale."
 	LocaleNameToLCID & .LocaleName, LOCALE_ALLOW_NEUTRAL_NAMES
 	test eax, eax
-	jz .locale_not_LCID
+	jcc_error jz, "LCID does not exist for locale."
 	mov [.locale], eax
 	jmp .basis_locale
 
@@ -239,7 +261,7 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 
 	GetStringTypeExA [.locale], CT_CTYPE1, & .lpSrcStr, 256, & .lpCharType
 	test eax, eax ; BOOL
-	jz .error
+	jcc_error jz, "GetStringTypeExA returned false."
 
 	; TODO: find suitable codepage for locale:
 
@@ -253,7 +275,7 @@ public Main as 'mainCRTStartup' ; linker expects this default entry point name
 	{bss:4} .cpiw CPINFOEXW
 	GetCPInfoExW [.codepage], 0, & .cpiw ; translate identifiers to code page number
 	test eax, eax ; BOOL
-	jz .invalid_code_page
+	jcc_error jz, "Invalid code page."
 	cmp [.cpiw.MaxCharSize], 1
 	jz .SBCS ; single-byte character set
 
@@ -287,10 +309,14 @@ $	10,27,'[93m',\
 	{bss:4} .dwFlags dd ?
 	mov [.dwFlags], edx
 
-; TODO: codepage/locale info header
-; & .cpiw.CodePageName
+$	10,27,'[93m',\
+	'   Locale:',10,\
+	'Code Page:',9
+	lstrlenW & .cpiw.CodePageName
+	xchg r8d, eax
+	WriteConsoleW [.hOutput], & .cpiw.CodePageName, r8d, 0, 0
 
-$	10,KHEX,\
+$	10,10,KHEX,\
 	"     0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F     ",10,BRDR,\
 	"   ╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗   ",10
 
@@ -406,15 +432,6 @@ $	BRDR,\
 		jnz @5B
 	end if
 	jmp .done
-
-.unable_to_resolve_locale:
-	jmp .error
-
-.locale_not_LCID: ; is this possible?
-	jmp .error
-
-.invalid_code_page:
-	jmp .error
 
 
 ; REFERENCES:

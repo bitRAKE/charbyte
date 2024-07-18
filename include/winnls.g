@@ -12,8 +12,6 @@ struct CPINFOEXW
 ends
 
 
-
-
 ; Flags for MultiByteToWideChar/WideCharToMultiByte
 MB_PRECOMPOSED		:=0x00000001
 MB_COMPOSITE		:=0x00000002
