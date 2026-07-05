@@ -85,7 +85,7 @@ $ $	10,27,'[97m'
 $ $	'Byte Character Table Utility version 0.1',10,10,27,'[32m'
 $ $	'  Usage:',27,'[m',' charbyte [help|locale|codepage] <value>',10
 $ $	'	the default mode is [codepage] (i.e. optional)',10
-$ $	'	the default codepage is ??',10
+$ $	'	the default codepage is 437 (OEM United States)',10
 $ $	'	LOCALE_USER_DEFAULT is the default locale',10
 $	'	<value> can be a number, name or string',10
 
