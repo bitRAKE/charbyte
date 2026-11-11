@@ -242,6 +242,3 @@ as a charset name.
 - **Double-byte code pages** are shown byte by byte: a lead byte is only half
   a character, so it is marked rather than converted. The tool is meant for
   single-byte code pages and says so first.
-- **Origin:** [bitRAKE/charbyte](https://github.com/bitRAKE/charbyte), ported
-  to this repository's projection. `docs/examples.md` describes what the port
-  found.
