@@ -1,7 +1,9 @@
-if __FILE__ = __SOURCE__ ; ------------------------------- building object file
+; Signed decimal UTF-16 text to a qword.  One source, two roles: assembled
+; on its own it is this module's object; included, it is the interface.
 
-format MS64 COFF
-section '.text$t' code executable readable align 64
+if __FILE__ = __SOURCE__ ; ------------------------------------------- object
+
+include 'lowbase.inc'
 
 public wtoi64_RDI
 wtoi64_RDI:
@@ -44,7 +46,7 @@ wtoi64_RDI:
 ;	RAX : signed-qword result
 ;	RDX : [0,9]
 
-else ; ---------------------------------------------------- including interface
+else ; ------------------------------------------------------------ interface
 
 extrn wtoi64_RDI
 
