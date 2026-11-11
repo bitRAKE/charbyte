@@ -1,5 +1,7 @@
 # charbyte
 
+![charbyte Arabic with legend](screenshot.png)
+
 A console table of the 256 byte values of a single-byte code page: what each
 byte becomes in Unicode, what kind of character it is, and the bytes that are
 not characters at all (controls, format characters, combining marks, lead
